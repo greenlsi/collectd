@@ -109,6 +109,8 @@ static cf_global_option_t cf_global_options[] =
 	{"Interval",    NULL, NULL},
 	{"ReadThreads", NULL, "5"},
 	{"WriteThreads", NULL, "5"},
+	{"WriteQueueLimitHigh", NULL, NULL},
+	{"WriteQueueLimitLow", NULL, NULL},
 	{"Timeout",     NULL, "2"},
 	{"AutoLoadPlugin", NULL, "false"},
 	{"PreCacheChain",  NULL, "PreCache"},
@@ -586,7 +588,7 @@ static int cf_include_all (oconfig_item_t *root, int depth)
 		sfree (pattern);
 
 		if (new == NULL)
-			continue;
+			return (-1);
 
 		/* Now replace the i'th child in `root' with `new'. */
 		cf_ci_replace_child (root, new, i);
@@ -605,6 +607,7 @@ static oconfig_item_t *cf_read_file (const char *file,
 		const char *pattern, int depth)
 {
 	oconfig_item_t *root;
+	int status;
 
 	assert (depth < CF_MAX_DEPTH);
 
@@ -636,7 +639,12 @@ static oconfig_item_t *cf_read_file (const char *file,
 		return (NULL);
 	}
 
-	cf_include_all (root, depth);
+	status = cf_include_all (root, depth);
+	if (status != 0)
+	{
+		oconfig_free (root);
+		return (NULL);
+	}
 
 	return (root);
 } /* oconfig_item_t *cf_read_file */
@@ -829,12 +837,6 @@ static oconfig_item_t *cf_read_generic (const char *path,
 
 	wordfree (&we);
 
-	if (root->children == NULL)
-	{
-		oconfig_free (root);
-		return (NULL);
-	}
-
 	return (root);
 } /* oconfig_item_t *cf_read_generic */
 /* #endif HAVE_WORDEXP_H */
@@ -914,6 +916,23 @@ const char *global_option_get (const char *option)
 			? cf_global_options[i].value
 			: cf_global_options[i].def);
 } /* char *global_option_get */
+
+long global_option_get_long (const char *option, long default_value)
+{
+		const char *str;
+		long value;
+
+		str = global_option_get (option);
+		if (NULL == str)
+			return (default_value);
+
+		errno = 0;
+		value = strtol (str, /* endptr = */ NULL, /* base = */ 0);
+		if (errno != 0)
+			return (default_value);
+
+		return (value);
+} /* char *global_option_get_long */
 
 cdtime_t cf_get_default_interval (void)
 {
@@ -1044,6 +1063,12 @@ int cf_read (char *filename)
 	if (conf == NULL)
 	{
 		ERROR ("Unable to read config file %s.", filename);
+		return (-1);
+	}
+	else if (conf->children_num == 0)
+	{
+		ERROR ("Configuration file %s is empty.", filename);
+		oconfig_free (conf);
 		return (-1);
 	}
 
